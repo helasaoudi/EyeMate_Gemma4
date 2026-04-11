@@ -1,0 +1,22 @@
+# Local artifacts
+node_modules
+.expo
+dist
+.expo-shared
+.turbo
+
+# Native folders that are rebuildable
+android
+ios
+
+# Git & editor metadata
+.git
+.gitignore
+.vscode
+.idea
+
+# Logs
+npm-debug.log
+yarn-error.log
+*.log
+

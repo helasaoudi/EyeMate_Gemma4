@@ -1,0 +1,14 @@
+# Core
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic>=2.0.0
+
+# ML — Gemma 4 multimodal (see https://huggingface.co/google/gemma-4-E4B-it)
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.51.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+sentencepiece>=0.1.99
+pillow>=10.0.0
