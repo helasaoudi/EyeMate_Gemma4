@@ -47,6 +47,7 @@ class ImageAnalysisService {
       const response = await axios.post(this.BACKEND_URL, formData, {
         timeout: BACKEND_CONFIG.INFER_TIMEOUT_MS,
         validateStatus: () => true,
+        headers: { ...BACKEND_CONFIG.COMMON_HEADERS },
       });
 
       console.log('🖼️ Response status:', response.status);
@@ -187,7 +188,10 @@ class ImageAnalysisService {
 
   async isBackendAvailable(): Promise<boolean> {
     try {
-      const response = await fetch(BACKEND_CONFIG.HEALTH_URL, { method: 'GET' });
+      const response = await fetch(BACKEND_CONFIG.HEALTH_URL, {
+        method: 'GET',
+        headers: { ...BACKEND_CONFIG.COMMON_HEADERS },
+      });
       if (!response.ok) return false;
       const j = (await response.json()) as { status?: string };
       return j.status === 'ready';

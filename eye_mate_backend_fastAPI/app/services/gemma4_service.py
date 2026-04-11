@@ -7,10 +7,7 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import re
-import tempfile
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -198,70 +195,49 @@ class Gemma4Service:
     ) -> str:
         assert self.model is not None and self.processor is not None and self._device is not None
 
-        # Official HF pattern: image URL in chat; file:// works with local temp file.
-        tmp_path = _write_temp_jpeg(pil_image)
-        try:
-            image_uri = Path(tmp_path).as_uri()
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "url": image_uri},
-                        {"type": "text", "text": user_text},
-                    ],
-                }
-            ]
+        # Do NOT use apply_chat_template + image URLs: HF may write temp files (file://)
+        # and fail in Docker. Use Processor.__call__ with PIL + image_token placeholders
+        # (see transformers tests/models/gemma4/test_processing_gemma4.py).
+        proc = self.processor
+        placeholder = proc.image_token
+        text_batch = [f"{placeholder}{user_text.strip()}"]
+        img_batch = [[pil_image]]
 
-            inputs = self.processor.apply_chat_template(
-                messages,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                add_generation_prompt=True,
+        logger.debug("Gemma4 inference: processor() path with PIL (no file:// / no data URL).")
+
+        inputs = proc(
+            images=img_batch,
+            text=text_batch,
+            return_tensors="pt",
+            return_mm_token_type_ids=True,
+            padding=True,
+        )
+
+        inputs = inputs.to(self._device)
+
+        input_len = inputs["input_ids"].shape[-1]
+
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
             )
-            if hasattr(inputs, "to"):
-                inputs = inputs.to(self._device)
-            else:
-                inputs = {
-                    k: v.to(self._device) if hasattr(v, "to") else v
-                    for k, v in inputs.items()
-                }
 
-            input_len = inputs["input_ids"].shape[-1]
+        response_ids = outputs[0][input_len:]
+        decoded = proc.decode(response_ids, skip_special_tokens=False)
 
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                )
-
-            response_ids = outputs[0][input_len:]
-            decoded = self.processor.decode(response_ids, skip_special_tokens=False)
-
-            if hasattr(self.processor, "parse_response"):
-                try:
-                    parsed = self.processor.parse_response(decoded)
-                    if isinstance(parsed, str):
-                        return parsed.strip()
-                    if isinstance(parsed, dict) and "text" in parsed:
-                        return str(parsed["text"]).strip()
-                except Exception as e:  # pragma: no cover
-                    logger.warning("parse_response failed, using raw decode: %s", e)
-
-            return self.processor.decode(response_ids, skip_special_tokens=True).strip()
-        finally:
+        if hasattr(proc, "parse_response"):
             try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+                parsed = proc.parse_response(decoded)
+                if isinstance(parsed, str):
+                    return parsed.strip()
+                if isinstance(parsed, dict) and "text" in parsed:
+                    return str(parsed["text"]).strip()
+            except Exception as e:  # pragma: no cover
+                logger.warning("parse_response failed, using raw decode: %s", e)
 
-
-def _write_temp_jpeg(pil_image: Image.Image) -> str:
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
-    pil_image.save(path, format="JPEG", quality=92)
-    return path
+        return proc.decode(response_ids, skip_special_tokens=True).strip()
 
 
 def _parse_structured_document(text: str, french: bool) -> tuple[str, str, str]:

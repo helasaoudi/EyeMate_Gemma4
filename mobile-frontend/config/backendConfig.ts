@@ -2,11 +2,15 @@
 
 export const BACKEND_CONFIG = {
   /**
-   * Docker/API on your Mac: use the Mac's LAN IP (same Wi‑Fi as the phone).
-   * Never use 127.0.0.1 on a real device — it points at the phone, not your PC.
-   * Simulator on Mac: http://127.0.0.1:8000 | Android emulator: http://10.0.2.2:8000
+   * Public tunnel (ngrok) or local LAN URL — no trailing slash.
+   * For local dev: http://<your-mac-lan-ip>:8000 (never 127.0.0.1 on a real device).
    */
-  BASE_URL: 'http://192.168.1.13:8000',
+  BASE_URL: 'https://660e-68-226-74-146.ngrok-free.app',
+
+  /** Helps ngrok’s free tier return the API response instead of an HTML warning page */
+  COMMON_HEADERS: {
+    'ngrok-skip-browser-warning': 'true',
+  } as Record<string, string>,
 
   INFER_PATH: '/infer',
   DOCUMENT_PATH: '/document/analyze',

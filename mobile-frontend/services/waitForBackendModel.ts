@@ -11,7 +11,10 @@ export async function waitForBackendModelReady(): Promise<void> {
 
   while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await fetch(BACKEND_CONFIG.HEALTH_URL, { method: 'GET' });
+      const res = await fetch(BACKEND_CONFIG.HEALTH_URL, {
+        method: 'GET',
+        headers: { ...BACKEND_CONFIG.COMMON_HEADERS },
+      });
       if (res.ok) {
         const j = (await res.json()) as { status?: string; message?: string };
         if (j.status === 'ready') {

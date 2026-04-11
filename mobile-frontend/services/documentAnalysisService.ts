@@ -42,7 +42,10 @@ class DocumentAnalysisService {
       },
       {
         timeout: BACKEND_CONFIG.DOCUMENT_TIMEOUT_MS,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...BACKEND_CONFIG.COMMON_HEADERS,
+        },
         validateStatus: () => true,
       }
     );
@@ -83,7 +86,10 @@ class DocumentAnalysisService {
 
   async testConnection(): Promise<boolean> {
     try {
-      const res = await fetch(BACKEND_CONFIG.HEALTH_URL, { method: 'GET' });
+      const res = await fetch(BACKEND_CONFIG.HEALTH_URL, {
+        method: 'GET',
+        headers: { ...BACKEND_CONFIG.COMMON_HEADERS },
+      });
       if (!res.ok) return false;
       const j = (await res.json()) as { status?: string };
       return j.status === 'ready';
