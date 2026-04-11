@@ -225,19 +225,26 @@ class Gemma4Service:
             )
 
         response_ids = outputs[0][input_len:]
-        decoded = proc.decode(response_ids, skip_special_tokens=False)
+        # Match HF Gemma 4 recipes: decode with skip_special_tokens=True, then parse_response;
+        # assistant text is under "content", not "text".
+        raw_text = proc.decode(response_ids, skip_special_tokens=True).strip()
 
         if hasattr(proc, "parse_response"):
             try:
-                parsed = proc.parse_response(decoded)
-                if isinstance(parsed, str):
+                parsed = proc.parse_response(
+                    proc.decode(response_ids, skip_special_tokens=True)
+                )
+                if isinstance(parsed, str) and parsed.strip():
                     return parsed.strip()
-                if isinstance(parsed, dict) and "text" in parsed:
-                    return str(parsed["text"]).strip()
+                if isinstance(parsed, dict):
+                    for key in ("content", "text"):
+                        val = parsed.get(key)
+                        if val is not None and str(val).strip():
+                            return str(val).strip()
             except Exception as e:  # pragma: no cover
                 logger.warning("parse_response failed, using raw decode: %s", e)
 
-        return proc.decode(response_ids, skip_special_tokens=True).strip()
+        return raw_text
 
 
 def _parse_structured_document(text: str, french: bool) -> tuple[str, str, str]:
