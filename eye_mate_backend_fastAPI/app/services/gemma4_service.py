@@ -199,19 +199,42 @@ class Gemma4Service:
         # and fail in Docker. Use Processor.__call__ with PIL + image_token placeholders
         # (see transformers tests/models/gemma4/test_processing_gemma4.py).
         proc = self.processor
-        placeholder = proc.image_token
-        text_batch = [f"{placeholder}{user_text.strip()}"]
-        img_batch = [[pil_image]]
-
-        logger.debug("Gemma4 inference: processor() path with PIL (no file:// / no data URL).")
-
-        inputs = proc(
-            images=img_batch,
-            text=text_batch,
-            return_tensors="pt",
-            return_mm_token_type_ids=True,
-            padding=True,
-        )
+        # Instruction-tuned Gemma 4 expects chat template + add_generation_prompt (HF notebooks).
+        # Raw image_token+text omits roles / assistant header and often yields empty generations.
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_image},
+                    {"type": "text", "text": user_text.strip()},
+                ],
+            }
+        ]
+        try:
+            inputs = proc.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+                processor_kwargs={
+                    "padding": True,
+                    "return_mm_token_type_ids": True,
+                },
+            )
+            logger.debug("Gemma4 inference: apply_chat_template + PIL image (no file URL).")
+        except Exception as e:
+            logger.warning(
+                "apply_chat_template failed (%s); using processor() PIL fallback", e
+            )
+            placeholder = proc.image_token
+            inputs = proc(
+                images=[[pil_image]],
+                text=[f"{placeholder}{user_text.strip()}"],
+                return_tensors="pt",
+                return_mm_token_type_ids=True,
+                padding=True,
+            )
 
         inputs = inputs.to(self._device)
 
@@ -224,7 +247,8 @@ class Gemma4Service:
                 do_sample=False,
             )
 
-        response_ids = outputs[0][input_len:]
+        sequences = outputs.sequences if hasattr(outputs, "sequences") else outputs
+        response_ids = sequences[0][input_len:]
         # Match HF Gemma 4 recipes: decode with skip_special_tokens=True, then parse_response;
         # assistant text is under "content", not "text".
         raw_text = proc.decode(response_ids, skip_special_tokens=True).strip()
