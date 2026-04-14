@@ -23,11 +23,12 @@ COPY --from=builder $VENV_PATH $VENV_PATH
 
 COPY app /app/app
 COPY main.py /app/main.py
-COPY run.sh /app/run.sh
-RUN chmod +x /app/run.sh
 
+# Listen on all interfaces so the API is reachable via LAN/VPN/Docker port publish.
 ENV HOST=0.0.0.0
 ENV PORT=8000
+# Default Hugging Face download cache (mount a volume here to avoid re-downloading the model).
+ENV HF_HOME=/root/.cache/huggingface
 
 EXPOSE 8000
 

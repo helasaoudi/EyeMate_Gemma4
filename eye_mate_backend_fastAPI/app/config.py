@@ -28,6 +28,7 @@ class Settings:
     # torch dtype: BFLOAT16 on CUDA, float32 on CPU unless overridden
     TORCH_DTYPE: str = os.getenv("TORCH_DTYPE", "bfloat16")
 
+    # On CPU/MPS, gemma4_service ignores DEVICE_MAP=auto and loads with device_map=None + .to(device).
     DEVICE_MAP: str = os.getenv("DEVICE_MAP", "auto")
     ATTN_IMPLEMENTATION: str = os.getenv("ATTN_IMPLEMENTATION", "sdpa")
 

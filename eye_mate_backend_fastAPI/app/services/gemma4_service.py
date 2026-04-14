@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -23,6 +25,121 @@ try:
 except ImportError:  # pragma: no cover
     AutoModelForMultimodalLM = None  # type: ignore
     AutoProcessor = None
+
+
+def _resolve_inference_device(model: torch.nn.Module) -> torch.device:
+    """
+    Pick a device for `inputs.to(device)` when using accelerate `device_map`
+    (e.g. CUDA). Skips `meta` placeholders from iteration order.
+    """
+    try:
+        emb = model.get_input_embeddings()
+        w = getattr(emb, "weight", None)
+        if w is not None and getattr(w, "device", None) is not None:
+            if w.device.type != "meta":
+                return w.device
+    except Exception:
+        pass
+    for t in list(model.parameters()) + list(model.buffers()):
+        if torch.is_tensor(t) and t.device.type != "meta":
+            return t.device
+    return torch.device("cpu")
+
+
+def _effective_device_map() -> Optional[str]:
+    """
+    On CPU/MPS, ``device_map='auto'`` can leave Gemma4 partly on ``meta`` while
+    weights sit on CPU — then ``generate()`` errors (inputs on cpu, model on meta).
+    Use a plain load (``device_map=None``) and ``.to(device)`` instead.
+    """
+    raw = (settings.DEVICE_MAP or "").strip()
+    if not raw or raw.lower() in ("none", "null"):
+        return None
+    if not torch.cuda.is_available() and raw.lower() == "auto":
+        logger.info(
+            "[Gemma4] Non-CUDA: using device_map=None + explicit .to(device) "
+            "(DEVICE_MAP=auto is unsafe for this model on CPU/MPS)."
+        )
+        return None
+    return raw
+
+
+def _single_device_target() -> torch.device:
+    """Real device when loading with ``device_map=None``."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    use_mps = os.getenv("GEMMA_USE_MPS", "").lower() in ("1", "true", "yes")
+    if use_mps and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def _text_from_parsed_response(parsed: Any) -> str:
+    """Turn tokenizer ``parse_response`` output into a single user-visible string."""
+
+    def walk(obj: Any) -> str:
+        if obj is None:
+            return ""
+        if isinstance(obj, str):
+            return obj.strip()
+        if isinstance(obj, dict):
+            for key in ("content", "text", "message", "assistant"):
+                if key in obj:
+                    s = walk(obj[key])
+                    if s:
+                        return s
+            for v in obj.values():
+                s = walk(v)
+                if s:
+                    return s
+        if isinstance(obj, (list, tuple)):
+            for item in obj:
+                s = walk(item)
+                if s:
+                    return s
+        return ""
+
+    return walk(parsed)
+
+
+def _decode_response_text(proc: Any, response_ids: torch.Tensor) -> str:
+    """Decode generated token ids; IT models often need ``parse_response`` on the decoded string."""
+
+    def _try_parse(decoded: str) -> str:
+        if not decoded or not hasattr(proc, "parse_response"):
+            return ""
+        try:
+            parsed = proc.parse_response(decoded)
+            if isinstance(parsed, str) and parsed.strip():
+                return parsed.strip()
+            if isinstance(parsed, dict):
+                return _text_from_parsed_response(parsed)
+        except Exception:
+            return ""
+        return ""
+
+    for skip_special in (True, False):
+        decoded = proc.decode(response_ids, skip_special_tokens=skip_special).strip()
+        if not decoded:
+            continue
+        from_parse = _try_parse(decoded)
+        if from_parse:
+            return from_parse
+        return decoded
+
+    if hasattr(proc, "parse_response"):
+        try:
+            parsed = proc.parse_response(response_ids)
+            if isinstance(parsed, str) and parsed.strip():
+                return parsed.strip()
+            if isinstance(parsed, dict):
+                s = _text_from_parsed_response(parsed)
+                if s:
+                    return s
+        except Exception as e:
+            logger.warning("parse_response(token ids) failed: %s", e)
+
+    return ""
 
 
 _DOCUMENT_TYPE_MAP = {
@@ -114,16 +231,22 @@ class Gemma4Service:
                 "FIRST RUN can take many minutes (large download). "
                 "Subsequent starts only read from cache."
             )
+            device_map = _effective_device_map()
             self.model = AutoModelForMultimodalLM.from_pretrained(
                 model_id,
                 dtype=dtype,
-                device_map=settings.DEVICE_MAP,
+                device_map=device_map,
                 attn_implementation=settings.ATTN_IMPLEMENTATION,
             )
             self.model.eval()
 
             self._set_load_progress("Step 3/3: Resolving device and marking model ready.")
-            self._device = next(self.model.parameters()).device
+            if device_map is None:
+                self._device = _single_device_target()
+                self.model.to(self._device)
+                logger.info("[Gemma4] Loaded with device_map=None; weights on %s", self._device)
+            else:
+                self._device = _resolve_inference_device(self.model)
             self._is_loaded = True
             self._load_progress = f"Ready on {self._device}."
             logger.info("[Gemma4] Finished loading. Inference is available.")
@@ -195,41 +318,39 @@ class Gemma4Service:
     ) -> str:
         assert self.model is not None and self.processor is not None and self._device is not None
 
-        # Do NOT use apply_chat_template + image URLs: HF may write temp files (file://)
-        # and fail in Docker. Use Processor.__call__ with PIL + image_token placeholders
-        # (see transformers tests/models/gemma4/test_processing_gemma4.py).
         proc = self.processor
-        # Instruction-tuned Gemma 4 expects chat template + add_generation_prompt (HF notebooks).
-        # Raw image_token+text omits roles / assistant header and often yields empty generations.
-        messages = [
+        # IT checkpoint expects chat layout + generation prompt (assistant header). Raw
+        # image_token+text often yields EOS immediately and an empty decode.
+        rgb = np.copy(np.asarray(pil_image.convert("RGB"), dtype=np.uint8))
+        conversation = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "image": pil_image},
+                    {"type": "image", "image": rgb},
                     {"type": "text", "text": user_text.strip()},
                 ],
             }
         ]
         try:
             inputs = proc.apply_chat_template(
-                messages,
+                conversation,
                 tokenize=True,
                 add_generation_prompt=True,
-                return_dict=True,
                 return_tensors="pt",
+                return_dict=True,
                 processor_kwargs={
                     "padding": True,
                     "return_mm_token_type_ids": True,
                 },
             )
-            logger.debug("Gemma4 inference: apply_chat_template + PIL image (no file URL).")
+            logger.debug("Gemma4 inference: apply_chat_template + in-memory numpy image.")
         except Exception as e:
             logger.warning(
-                "apply_chat_template failed (%s); using processor() PIL fallback", e
+                "apply_chat_template failed (%s); falling back to image_token prompt.", e
             )
             placeholder = proc.image_token
             inputs = proc(
-                images=[[pil_image]],
+                images=[[rgb]],
                 text=[f"{placeholder}{user_text.strip()}"],
                 return_tensors="pt",
                 return_mm_token_type_ids=True,
@@ -240,35 +361,22 @@ class Gemma4Service:
 
         input_len = inputs["input_ids"].shape[-1]
 
+        # Greedy decoding: hub generation_config.json may set top_p/top_k for sampling;
+        # those values conflict with do_sample=False and trigger HF warnings.
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                temperature=1.0,
+                top_p=1.0,
+                top_k=50,
             )
 
         sequences = outputs.sequences if hasattr(outputs, "sequences") else outputs
         response_ids = sequences[0][input_len:]
-        # Match HF Gemma 4 recipes: decode with skip_special_tokens=True, then parse_response;
-        # assistant text is under "content", not "text".
-        raw_text = proc.decode(response_ids, skip_special_tokens=True).strip()
 
-        if hasattr(proc, "parse_response"):
-            try:
-                parsed = proc.parse_response(
-                    proc.decode(response_ids, skip_special_tokens=True)
-                )
-                if isinstance(parsed, str) and parsed.strip():
-                    return parsed.strip()
-                if isinstance(parsed, dict):
-                    for key in ("content", "text"):
-                        val = parsed.get(key)
-                        if val is not None and str(val).strip():
-                            return str(val).strip()
-            except Exception as e:  # pragma: no cover
-                logger.warning("parse_response failed, using raw decode: %s", e)
-
-        return raw_text
+        return _decode_response_text(proc, response_ids)
 
 
 def _parse_structured_document(text: str, french: bool) -> tuple[str, str, str]:
