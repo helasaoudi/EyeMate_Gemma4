@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { Audio } from 'expo-av';
-import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system';
+
+import { ASSEMBLYAI_CONFIG } from '../config/assemblyaiConfig';
 
 export type VoiceToTextCallback = (text: string) => void;
 export type VoiceToTextErrorCallback = (error: string) => void;
@@ -14,13 +15,17 @@ class VoiceToTextService {
   private recording: Audio.Recording | null = null;
   private recordingStartTime: number = 0;
   
-  private readonly API_KEY = "c352cbddc97548f9a1b85d6baec12639";
-  private readonly BASE_URL = "https://api.assemblyai.com";
   private readonly MIN_RECORDING_DURATION = 1000;
-  
-  private readonly headers = {
-    authorization: this.API_KEY,
-  };
+
+  private getTranscribeHeaders(): Record<string, string> {
+    const key = ASSEMBLYAI_CONFIG.API_KEY;
+    if (!key) {
+      console.error(
+        '[voiceToText] Missing EXPO_PUBLIC_ASSEMBLYAI_API_KEY — add it to .env and restart Expo'
+      );
+    }
+    return { authorization: key };
+  }
 
   constructor() {
     this.setupAudio();
@@ -29,16 +34,24 @@ class VoiceToTextService {
   private async setupAudio() {
     try {
       await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-        staysActiveInBackground: false,
-      });
+      await this.setAudioModeForRecording();
     } catch (error) {
       console.error('Error setting up audio:', error);
     }
+  }
+
+  /**
+   * Required before every Recording session on iOS. TTS / playback leaves
+   * `allowsRecordingIOS: false`, which triggers "Recording not allowed on iOS".
+   */
+  async setAudioModeForRecording(): Promise<void> {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+      staysActiveInBackground: false,
+    });
   }
 
   async startListening(
@@ -49,6 +62,8 @@ class VoiceToTextService {
     this.isStarting = true;
 
     try {
+      await this.setAudioModeForRecording();
+
       // Nettoyage si un enregistrement existe déjà
       if (this.recording) {
         try {
@@ -130,6 +145,15 @@ class VoiceToTextService {
   }
 
   private async transcribeAudioFile(audioUri: string): Promise<string> {
+    const key = ASSEMBLYAI_CONFIG.API_KEY;
+    if (!key) {
+      throw new Error(
+        'AssemblyAI key missing. Set EXPO_PUBLIC_ASSEMBLYAI_API_KEY in .env and restart Expo.'
+      );
+    }
+    const headers = this.getTranscribeHeaders();
+    const base = ASSEMBLYAI_CONFIG.BASE_URL;
+
     try {
       const audioData = await FileSystem.readAsStringAsync(audioUri, {
         encoding: FileSystem.EncodingType.Base64,
@@ -141,26 +165,34 @@ class VoiceToTextService {
         audioBytes[i] = binaryString.charCodeAt(i);
       }
 
-      const uploadResponse = await axios.post(`${this.BASE_URL}/v2/upload`, audioBytes, {
-        headers: { ...this.headers, 'Content-Type': 'application/octet-stream' },
+      const uploadResponse = await axios.post(`${base}/v2/upload`, audioBytes, {
+        headers: { ...headers, 'Content-Type': 'application/octet-stream' },
       });
 
       const audioUrl = uploadResponse.data.upload_url;
-      const transcriptResponse = await axios.post(`${this.BASE_URL}/v2/transcript`, {
-        audio_url: audioUrl,
-        language_code: "fr",
-      }, { headers: this.headers });
+      const transcriptResponse = await axios.post(
+        `${base}/v2/transcript`,
+        {
+          audio_url: audioUrl,
+          language_code: 'fr',
+        },
+        { headers }
+      );
 
-      return await this.pollTranscriptResult(transcriptResponse.data.id);
+      return await this.pollTranscriptResult(transcriptResponse.data.id, headers, base);
     } catch (error) {
       throw error;
     }
   }
 
-  private async pollTranscriptResult(transcriptId: string): Promise<string> {
-    const pollingEndpoint = `${this.BASE_URL}/v2/transcript/${transcriptId}`;
+  private async pollTranscriptResult(
+    transcriptId: string,
+    headers: Record<string, string>,
+    baseUrl: string
+  ): Promise<string> {
+    const pollingEndpoint = `${baseUrl}/v2/transcript/${transcriptId}`;
     while (true) {
-      const response = await axios.get(pollingEndpoint, { headers: this.headers });
+      const response = await axios.get(pollingEndpoint, { headers });
       if (response.data.status === "completed") return response.data.text;
       if (response.data.status === "error") throw new Error("Transcription failed");
       await new Promise(resolve => setTimeout(resolve, 1500));

@@ -21,9 +21,9 @@ from app.prompts.document_prompts import PROMPT_EN, PROMPT_FR
 logger = logging.getLogger(__name__)
 
 try:
-    from transformers import AutoModelForMultimodalLM, AutoProcessor
+    from transformers import AutoModelForVision2Seq, AutoProcessor
 except ImportError:  # pragma: no cover
-    AutoModelForMultimodalLM = None  # type: ignore
+    AutoModelForVision2Seq = None  # type: ignore
     AutoProcessor = None
 
 
@@ -207,7 +207,7 @@ class Gemma4Service:
             logger.info("Gemma 4 model already loaded")
             return
 
-        if AutoModelForMultimodalLM is None or AutoProcessor is None:
+        if AutoModelForVision2Seq is None or AutoProcessor is None:
             raise RuntimeError("transformers must be installed with Gemma 4 support.")
 
         model_id = settings.MODEL_NAME
@@ -232,7 +232,7 @@ class Gemma4Service:
                 "Subsequent starts only read from cache."
             )
             device_map = _effective_device_map()
-            self.model = AutoModelForMultimodalLM.from_pretrained(
+            self.model = AutoModelForVision2Seq.from_pretrained(
                 model_id,
                 dtype=dtype,
                 device_map=device_map,

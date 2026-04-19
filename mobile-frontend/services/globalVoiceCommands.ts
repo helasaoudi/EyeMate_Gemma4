@@ -1,13 +1,156 @@
-import { useRouter } from 'expo-router';
 import ttsService from './ttsService';
 import voiceToTextService from './voiceToTextService';
-import { useSettings } from '../contexts/SettingsContext';
 
 export interface SettingsCommands {
   onLogout: () => void;
   onLanguageChange: (lang: 'fr' | 'en') => void;
   onVoiceGenderChange: (gender: 'male' | 'female') => void;
   onHelp: () => void;
+}
+
+/**
+ * Paper / text to read → Read document. Checked before environment so
+ * "describe the document" does not open the camera.
+ */
+function matchesDocumentNav(clean: string): boolean {
+  const snippets = [
+    'document',
+    'papier',
+    'paper',
+    'facture',
+    'invoice',
+    'reçu',
+    'recu',
+    'receipt',
+    'lettre',
+    'letter',
+    'formulaire',
+    'form',
+    'passeport',
+    'passport',
+    'ticket',
+    'contrat',
+    'contract',
+    "carte d'identité",
+    'carte identité',
+    'id card',
+    'business card',
+    'read this text',
+    'lire ce texte',
+    'lire le texte',
+    'scan this page',
+    'scanne cette page',
+    'feuille',
+    'sheet of paper',
+    'billet',
+    'note de frais',
+    'read document',
+    'mode document',
+    'scan a document',
+    'scanne un document',
+  ];
+  if (snippets.some((s) => clean.includes(s))) return true;
+  if (
+    clean.includes('lire') &&
+    (clean.includes('document') ||
+      clean.includes('texte') ||
+      clean.includes('page') ||
+      clean.includes('papier'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Surroundings / scene / "what happens around me" → Camera (substring match, not exact phrase).
+ */
+function matchesEnvironmentNav(clean: string): boolean {
+  const direct = [
+    'environnement',
+    'environment',
+    'around me',
+    'autour de moi',
+    'around us',
+    'autour de nous',
+    'what happen',
+    "what's happening",
+    'whats happening',
+    'what is happening',
+    'happens around',
+    'se passe autour',
+    'what is around',
+    "what's around",
+    'describe the scene',
+    'décris la scène',
+    'describe my surroundings',
+    'in this room',
+    'dans cette pièce',
+    'surroundings',
+    'alentours',
+    'camera',
+    'caméra',
+    'field of view',
+    'what do you see',
+    'see around',
+    'voir autour',
+  ];
+  if (direct.some((s) => clean.includes(s))) return true;
+
+  const hasSpatial =
+    clean.includes('around') ||
+    clean.includes('autour') ||
+    clean.includes('environnement') ||
+    clean.includes('environment') ||
+    clean.includes('surroundings') ||
+    clean.includes('happen') ||
+    clean.includes('happening') ||
+    clean.includes('scene') ||
+    clean.includes('scène') ||
+    clean.includes('room') ||
+    clean.includes('pièce');
+
+  const hasDescribeOrAsk =
+    clean.includes('describe') ||
+    clean.includes('explain') ||
+    clean.includes('décris') ||
+    clean.includes('décrire') ||
+    clean.includes('explique') ||
+    clean.includes('tell me') ||
+    clean.includes('can you') ||
+    clean.includes('could you') ||
+    clean.includes('peux-tu') ||
+    clean.includes('pourrais-tu');
+
+  if (hasSpatial && hasDescribeOrAsk) return true;
+
+  if (
+    (clean.includes('explain') || clean.includes('explique')) &&
+    (clean.includes('around') ||
+      clean.includes('autour') ||
+      clean.includes('happen') ||
+      clean.includes('happening'))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+async function speakAndNavigate(
+  router: { push: (href: string) => void },
+  fr: string,
+  en: string,
+  path: string
+): Promise<void> {
+  const lang = ttsService.getLanguage() === 'fr' ? fr : en;
+  await voiceToTextService.stopListening();
+  await ttsService.speak(lang, {
+    onDone: () =>
+      path === '/(tabs)/Camera'
+        ? router.push('/(tabs)/Camera?quick=1')
+        : router.push(path),
+  });
 }
 
 export const handleGlobalVoiceCommand = async (
@@ -33,24 +176,45 @@ export const handleGlobalVoiceCommand = async (
     }
   }
 
-  // COMMANDES DE NAVIGATION
+  // Navigation — flexible phrases (substring). Document checked before environment.
+  if (matchesDocumentNav(clean)) {
+    await speakAndNavigate(
+      router,
+      'Ouverture du document',
+      'Opening document',
+      '/(tabs)/ReadDocument'
+    );
+    return true;
+  }
+
+  if (matchesEnvironmentNav(clean)) {
+    await speakAndNavigate(
+      router,
+      'Ouverture de la caméra',
+      'Opening camera',
+      '/(tabs)/Camera'
+    );
+    return true;
+  }
+
   const commands = [
     { keywords: ['accueil', 'home', 'retour'], path: '/(tabs)/Home', fr: 'Retour à l\'accueil', en: 'Returning home' },
-    { keywords: ['document', 'lire'], path: '/(tabs)/ReadDocument', fr: 'Ouverture du document', en: 'Opening document' },
     { keywords: ['historique', 'history'], path: '/(tabs)/History', fr: 'Ouverture de l\'historique', en: 'Opening history' },
-    { keywords: ['camera', 'environnement', 'environment'], path: '/(tabs)/Camera', fr: 'Ouverture de la caméra', en: 'Opening camera' },
     { keywords: ['analyse', 'analysis'], path: '/(tabs)/AnalysisResults', fr: 'Ouverture des résultats', en: 'Opening analysis' },
     { keywords: ['paramètres', 'parametres', 'settings'], path: '/(tabs)/settings', fr: 'Ouverture des paramètres', en: 'Opening settings' },
   ];
 
   for (const command of commands) {
-    if (command.keywords.some(keyword => clean.includes(keyword))) {
+    if (command.keywords.some((keyword) => clean.includes(keyword))) {
       const lang = ttsService.getLanguage() === 'fr' ? command.fr : command.en;
-      
+
       await voiceToTextService.stopListening();
-      
-      await ttsService.speak(lang, { 
-        onDone: () => router.push(command.path) 
+
+      await ttsService.speak(lang, {
+        onDone: () =>
+          command.path === '/(tabs)/Camera'
+            ? router.push('/(tabs)/Camera?quick=1')
+            : router.push(command.path),
       });
       return true;
     }
@@ -194,9 +358,9 @@ export const getAvailableCommands = (language: 'fr' | 'en') => {
 
 📍 NAVIGATION :
 • "Accueil" - Retour à l'accueil
-• "Document" - Mode document
+• Document / papier / facture… - Mode document (mots contenus dans la phrase)
 • "Historique" - Voir l'historique
-• "Environnement" - Mode environnement
+• Environnement, autour de moi, décris ce qui se passe… - Caméra (mots contenus)
 • "Paramètres" - Écran des paramètres
 
 ⚙️ PARAMÈTRES :
@@ -221,9 +385,9 @@ export const getAvailableCommands = (language: 'fr' | 'en') => {
 
 📍 NAVIGATION :
 • "Home" - Return to home
-• "Document" - Document mode
+• Document, paper, invoice… - Document mode (phrase contains these)
 • "History" - View history
-• "Environment" - Environment mode
+• Environment, around me, what happens, describe the scene… - Camera (phrase contains these)
 • "Settings" - Settings screen
 
 ⚙️ SETTINGS :

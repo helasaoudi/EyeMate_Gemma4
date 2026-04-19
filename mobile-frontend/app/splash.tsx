@@ -1,5 +1,4 @@
-// app/splash.tsx - UPDATED COLORS
-import { useAuth } from '@clerk/clerk-expo';
+// app/splash.tsx — competition mode: no sign-in routing (see app/_layout.tsx).
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
@@ -7,21 +6,14 @@ import { Image, StyleSheet, Text, ActivityIndicator } from 'react-native';
 
 export default function SplashScreen() {
   const router = useRouter();
-  const { isSignedIn, isLoaded } = useAuth();
 
   useEffect(() => {
-    if (!isLoaded) return;
-
     const timer = setTimeout(() => {
-      if (isSignedIn) {
-        router.replace('/(tabs)');
-      } else {
-        router.replace('/(auth)/sign-in');
-      }
+      router.replace('/onboarding');
     }, 1500);
 
     return () => clearTimeout(timer);
-  }, [isLoaded, isSignedIn]);
+  }, [router]);
 
   return (
     <LinearGradient

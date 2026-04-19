@@ -14,7 +14,8 @@
         "NSPhotoLibraryUsageDescription": "Allow EyeMate to save photos to your gallery",
         "NSMicrophoneUsageDescription": "Allow EyeMate to access your microphone for voice commands",
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
         }
       }
     },
@@ -90,7 +91,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "ASSEMBLYAI_API_KEY": "c352cbddc97548f9a1b85d6baec12639"
+      "ASSEMBLYAI_API_KEY": ""
     }
   }
 }

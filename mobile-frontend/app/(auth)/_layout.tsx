@@ -1,4 +1,6 @@
 // app/(auth)/_layout.tsx
+// Competition build: root layout does not navigate here (sign-in / sign-up unused).
+// Kept for later production — Clerk flows in sign-in.tsx & sign-up.tsx.
 import { Redirect, Stack } from 'expo-router';
 import { useAuth } from '@clerk/clerk-expo';
 

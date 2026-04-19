@@ -34,6 +34,42 @@ class Settings:
 
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # vLLM Configuration
+    # Set USE_VLLM=true to enable vLLM engine (much faster inference)
+    # Note: vLLM only works on Linux with NVIDIA GPUs, not on macOS
+    USE_VLLM: bool = os.getenv("USE_VLLM", "false").lower() in ("true", "1", "yes")
+    
+    # vLLM GPU memory utilization (0.0-1.0). Higher = more memory used, better performance
+    VLLM_GPU_MEMORY_UTILIZATION: float = float(
+        os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.90")
+    )
+    
+    # Tensor parallelism size (number of GPUs to split model across)
+    VLLM_TENSOR_PARALLEL_SIZE: int = int(os.getenv("VLLM_TENSOR_PARALLEL_SIZE", "1"))
+    
+    # Data type for model weights (auto, half, float16, bfloat16, float32)
+    VLLM_DTYPE: str = os.getenv("VLLM_DTYPE", "auto")
+    
+    # Enable chunked prefill for better throughput with long contexts
+    VLLM_ENABLE_CHUNKED_PREFILL: bool = os.getenv(
+        "VLLM_ENABLE_CHUNKED_PREFILL", "true"
+    ).lower() in ("true", "1", "yes")
+    
+    # Maximum model sequence length (reduce if OOM)
+    VLLM_MAX_MODEL_LEN: int = int(os.getenv("VLLM_MAX_MODEL_LEN", "8192"))
+    
+    # Enforce eager execution (disable CUDA graphs). Set to false for better perf
+    VLLM_ENFORCE_EAGER: bool = os.getenv("VLLM_ENFORCE_EAGER", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    
+    # Enable prefix caching to reuse KV cache for repeated prompt prefixes
+    VLLM_ENABLE_PREFIX_CACHING: bool = os.getenv(
+        "VLLM_ENABLE_PREFIX_CACHING", "true"
+    ).lower() in ("true", "1", "yes")
+
     # Natural-language prompts for /infer (camera); not Florence task tokens
     AVAILABLE_TASKS: list[str] = [
         "Describe in detail what you see in this image, including objects, colors, and their positions.",

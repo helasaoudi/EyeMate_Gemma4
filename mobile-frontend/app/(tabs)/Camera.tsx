@@ -1,5 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -11,7 +11,7 @@ import {
   Dimensions,
   Animated,
 } from 'react-native';
-import { Audio } from 'expo-av';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
@@ -32,6 +32,10 @@ type AppState =
   | 'redirecting';
 
 export default function CameraScreen() {
+  const { quick: quickParam } = useLocalSearchParams<{ quick?: string }>();
+  /** Opened via voice command (`?quick=1`) — skip long welcome + shorten countdown */
+  const quickEntry = quickParam === '1';
+
   const [permission, requestPermission] = useCameraPermissions();
   const [state, setState] = useState<AppState>('greeting');
   const [isListening, setIsListening] = useState(false);
@@ -40,8 +44,9 @@ export default function CameraScreen() {
   
   const cameraRef = useRef<CameraView>(null);
   const router = useRouter();
-  const listeningTimer = useRef<NodeJS.Timeout | null>(null);
+  const listeningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMounted = useRef(true); // <--- AJOUT SÉCURITÉ
+  const prevPermissionGranted = useRef<boolean | undefined>(undefined);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -85,11 +90,14 @@ export default function CameraScreen() {
     }, [cleanupAll])
   );
 
+  /** If camera permission was just granted, start session (initial flow had exited early). */
   useEffect(() => {
-    if (permission?.granted) {
-      startAutoCapture();
+    const granted = !!permission?.granted;
+    if (prevPermissionGranted.current === false && granted && isMounted.current) {
+      startCameraApp();
     }
-  }, [permission]);
+    prevPermissionGranted.current = granted;
+  }, [permission?.granted]);
 
   const startCameraApp = async () => {
     if (!isMounted.current) return;
@@ -97,25 +105,37 @@ export default function CameraScreen() {
     setTranscript('');
     setStatusMessage(getLocalizedText('Initialisation...', 'Initializing...'));
     if (!permission?.granted) return;
+
+    if (quickEntry) {
+      setState('processing');
+      setStatusMessage(getLocalizedText('Préparation...', 'Preparing...'));
+      await new Promise((r) => setTimeout(r, 350));
+      if (isMounted.current) await startAutoCapture({ quick: true });
+      return;
+    }
+
     await speakLocalized(
       'Bienvenue sur la caméra. Je vais analyser votre environnement.',
       'Welcome to the camera. I will analyze your environment.',
-      { onDone: () => isMounted.current && startAutoCapture() }
+      { onDone: () => isMounted.current && startAutoCapture({ quick: false }) }
     );
   };
 
-  const startAutoCapture = async () => {
+  const startAutoCapture = async (opts?: { quick?: boolean }) => {
     if (!isMounted.current) return;
+    const quick = opts?.quick ?? false;
     setState('processing');
     setStatusMessage(getLocalizedText('Préparation...', 'Preparing...'));
     await voiceToTextService.stopListening();
     if (listeningTimer.current) clearTimeout(listeningTimer.current);
     setIsListening(false);
-    await speakLocalized(
-      "Analyse de l'environnement. La photo sera prise automatiquement.",
-      "Environment analysis. The photo will be taken automatically."
-    );
-    await new Promise(r => setTimeout(r, 3000));
+    if (!quick) {
+      await speakLocalized(
+        "Analyse de l'environnement. La photo sera prise automatiquement.",
+        'Environment analysis. The photo will be taken automatically.'
+      );
+    }
+    await new Promise((r) => setTimeout(r, quick ? 800 : 1200));
     if (!isMounted.current) return;
     Vibration.vibrate([100, 50, 100]);
     const uri = await takePicture();
@@ -142,11 +162,12 @@ export default function CameraScreen() {
       setState('analyzing');
       setStatusMessage(getLocalizedText('Analyse en cours...', 'Analyzing...'));
       const description = await imageAnalysisService.analyzeImage(uri, () => {});
-      if (isMounted.current) {
-        await new Promise<void>((resolve) => {
-          ttsService.speak(description, { onDone: () => resolve() });
-        });
-      }
+      if (!isMounted.current) return;
+      setState('processing');
+      setStatusMessage(
+        getLocalizedText('Lecture de la description...', 'Reading description...')
+      );
+      await ttsService.speak(description);
     } finally {
       if (isMounted.current) setState('listening');
     }
@@ -179,11 +200,19 @@ export default function CameraScreen() {
     if (listeningTimer.current) clearTimeout(listeningTimer.current);
     setIsListening(false);
     const commandHandled = await handleGlobalVoiceCommand(clean, router, () => {
-        if (isMounted.current) speakLocalized("Très bien, nouvelle capture.", "Okay, new capture.", { onDone: startAutoCapture });
+        if (isMounted.current) {
+          speakLocalized('Très bien, nouvelle capture.', 'Okay, new capture.', {
+            onDone: () => startAutoCapture({ quick: true }),
+          });
+        }
     });
     if (commandHandled) return;
     if (clean.includes('autre chose') || clean.includes('retry') || clean.includes('réessayer')) {
-      if (isMounted.current) await speakLocalized("Très bien, essayons à nouveau.", "Okay, let's try again.", { onDone: startAutoCapture });
+      if (isMounted.current) {
+        await speakLocalized('Très bien, essayons à nouveau.', "Okay, let's try again.", {
+          onDone: () => startAutoCapture({ quick: true }),
+        });
+      }
       return;
     }
     if (isMounted.current) restartListening();
@@ -199,16 +228,15 @@ export default function CameraScreen() {
     );
   };
 
+  /** Post-analysis cue (asset bip.wav was missing from the repo). */
   const playBeepSound = async () => {
     if (!isMounted.current) return;
-    const soundObject = new Audio.Sound();
     try {
-      await soundObject.loadAsync(require('../../assets/bip.wav'));
-      await soundObject.playAsync();
-      soundObject.setOnPlaybackStatusUpdate((status) => {
-        if (status.didJustFinish) soundObject.unloadAsync();
-      });
-    } catch (error) { console.log('Son error:', error); }
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Vibration.vibrate([0, 40, 60, 40]);
+    } catch (error) {
+      console.log('Beep feedback error:', error);
+    }
   };
 
   const goHomeWithError = async () => {

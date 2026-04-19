@@ -1,4 +1,6 @@
 // app/onboarding.tsx
+// Competition / demo: no sign-in after onboarding — always continue to main tabs.
+// Clerk sign-in & sign-up live under app/(auth)/ — disabled in app/_layout.tsx for the competition.
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useState, useRef, useEffect } from 'react';
@@ -13,14 +15,10 @@ import {
   Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth } from '@clerk/clerk-expo';
-
 const { width, height } = Dimensions.get('window');
 
 export default function OnboardingScreen() {
   const router = useRouter();
-  const { isSignedIn } = useAuth();
   const [currentScreen, setCurrentScreen] = useState(0);
   
   const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -99,9 +97,8 @@ export default function OnboardingScreen() {
     }
   };
 
-  const completeOnboarding = async () => {
-    await AsyncStorage.setItem('hasSeenOnboarding', 'true');
-    isSignedIn ? router.replace('/(tabs)') : router.replace('/(auth)/sign-in');
+  const completeOnboarding = () => {
+    router.replace('/(tabs)/Home');
   };
 
   const screen = screens[currentScreen];

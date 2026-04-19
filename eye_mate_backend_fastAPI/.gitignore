@@ -38,3 +38,7 @@ myenv/
 .env.local
 .env.*.local
 *.log
+
+# Markdown files (except README)
+*.md
+!README.md
