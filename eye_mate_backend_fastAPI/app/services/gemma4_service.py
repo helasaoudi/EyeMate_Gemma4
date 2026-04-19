@@ -21,9 +21,9 @@ from app.prompts.document_prompts import PROMPT_EN, PROMPT_FR
 logger = logging.getLogger(__name__)
 
 try:
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 except ImportError:  # pragma: no cover
-    AutoModelForVision2Seq = None  # type: ignore
+    AutoModelForImageTextToText = None  # type: ignore
     AutoProcessor = None
 
 
@@ -207,7 +207,7 @@ class Gemma4Service:
             logger.info("Gemma 4 model already loaded")
             return
 
-        if AutoModelForVision2Seq is None or AutoProcessor is None:
+        if AutoModelForImageTextToText is None or AutoProcessor is None:
             raise RuntimeError("transformers must be installed with Gemma 4 support.")
 
         model_id = settings.MODEL_NAME
@@ -217,7 +217,10 @@ class Gemma4Service:
                 "Step 1/3: Loading processor & tokenizer from Hugging Face "
                 "(first time: downloads; later: uses disk cache)."
             )
-            self.processor = AutoProcessor.from_pretrained(model_id)
+            self.processor = AutoProcessor.from_pretrained(
+                model_id, 
+                trust_remote_code=True
+            )
 
             if torch.cuda.is_available():
                 dtype = torch.bfloat16
@@ -232,11 +235,12 @@ class Gemma4Service:
                 "Subsequent starts only read from cache."
             )
             device_map = _effective_device_map()
-            self.model = AutoModelForVision2Seq.from_pretrained(
+            self.model = AutoModelForImageTextToText.from_pretrained(
                 model_id,
                 dtype=dtype,
                 device_map=device_map,
                 attn_implementation=settings.ATTN_IMPLEMENTATION,
+                trust_remote_code=True,
             )
             self.model.eval()
 

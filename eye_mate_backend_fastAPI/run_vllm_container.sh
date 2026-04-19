@@ -25,9 +25,9 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     docker rm $CONTAINER_NAME 2>/dev/null || true
 fi
 
-# Pull latest vLLM image for DGX Spark
+# Pull latest vLLM image optimized for ARM64 + GPU
 echo "📥 Pulling vLLM container..."
-docker pull nvcr.io/nvidia/vllm:latest
+docker pull vllm/vllm-openai:latest
 
 # Run vLLM container
 echo "🏃 Starting vLLM container..."
@@ -39,7 +39,7 @@ docker run -d \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     -e NVIDIA_VISIBLE_DEVICES=all \
     -e HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-}" \
-    nvcr.io/nvidia/vllm:latest \
+    vllm/vllm-openai:latest \
     --model $MODEL_NAME \
     --host 0.0.0.0 \
     --port 8000 \
