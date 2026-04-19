@@ -1,0 +1,18 @@
+# FastAPI Backend Dependencies (without vLLM - uses containerized vLLM instead)
+
+# Core
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic>=2.0.0
+
+# Image processing
+pillow>=10.0.0
+numpy>=1.24.0
+
+# OpenAI client (to communicate with vLLM's OpenAI-compatible API)
+openai>=1.0.0
+
+# HTTP client
+httpx>=0.25.0
+requests>=2.31.0
